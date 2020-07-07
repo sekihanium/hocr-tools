@@ -50,15 +50,11 @@ class StdoutWrapper:
 
 def export_pdf(playground, default_dpi, savefile=False):
     """Create a searchable PDF from a pile of HOCR + JPEG"""
-    images = sorted(glob.glob(os.path.join(playground, '*.jpg')))
-    if len(images) == 0:
-        print("WARNING: No JPG images found in the folder", playground,
-              "\nScript cannot proceed without them and will terminate now.\n")
-        sys.exit(0)
     load_invisible_font()
     pdf = Canvas(savefile if savefile else StdoutWrapper(), pageCompression=1)
     pdf.setCreator('hocr-tools')
     pdf.setTitle(os.path.basename(playground))
+    images = sorted(glob.glob(os.path.join(playground, '*.jpg')))
     dpi = default_dpi
     for image in images:
         im = Image.open(image)
@@ -80,7 +76,16 @@ def add_text_layer(pdf, image, height, dpi):
     """Draw an invisible text layer for OCR data"""
     p1 = re.compile(r'bbox((\s+\d+){4})')
     p2 = re.compile(r'baseline((\s+[\d\.\-]+){2})')
-    hocrfile = os.path.splitext(image)[0] + ".hocr"
+
+    # filename: <number>_<rotation>_.hocr
+    hocrfile_list = glob.glob(os.path.splitext(image)[0]+'_*_.hocr')
+    rotation = os.path.basename(hocrfile_list[0]).split('_')[1]
+    if len(rotation) > 0:
+        rotation = int(rotation)
+    else:
+        rotation = 0
+    hocrfile = hocrfile_list[0]
+
     hocr = etree.parse(hocrfile, html.XHTMLParser())
     for line in hocr.xpath('//*[@class="ocr_line"]'):
         linebox = p1.search(line.attrib['title']).group(1).split()
@@ -108,13 +113,32 @@ def add_text_layer(pdf, image, height, dpi):
                         (box[0] + box[2]) / 2 - linebox[0]) + linebox[3]
             text = pdf.beginText()
             text.setTextRenderMode(3)  # double invisible
-            text.setFont('invisible', 8)
-            text.setTextOrigin(box[0] * 72 / dpi, height - b * 72 / dpi)
-            box_width = (box[2] - box[0]) * 72 / dpi
+            #text.setFont('invisible', 8)
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+            pdfmetrics.registerFont(UnicodeCIDFont('HeiseiMin-W3'))
+            text.setFont('HeiseiMin-W3', 8)
+            
+            x = box[0] * 72 / dpi
+            y = height - b * 72 / dpi
+            if rotation == 0:
+                text.setTextOrigin(x, y)
+            elif rotation == 90:
+                text.setTextOrigin(y, -x)
+            elif rotation == -90:
+                text.setTextOrigin(-y, x)
+            elif rotation == 180 or -180:
+                text.setTextOrigin(-x, -y)
+            
+            box_width = abs(box[2] - box[0]) * 72 / dpi
             text.setHorizScale(100.0 * box_width / font_width)
             text.textLine(rawtext)
+            # rotate 180
+            pdf.saveState()
+            pdf.rotate(rotation)
             pdf.drawText(text)
-
+            pdf.restoreState()
+            
 
 def polyval(poly, x):
     return x * poly[0] + poly[1]
@@ -146,7 +170,7 @@ pylRc2Zn+XDQWZIL8iO5KC9S+1RekOex1uOyZGR/w/Hf1lhzqVfFsxE39B/ws7Rm3N3nDrhPuMfc
 w3R/aE28KsfY2J+RPNp+j+KaOoCey4h+Dd48b9O5G0v2K7j0AM6s+5WQ/E0wVoK+pA6/3bup7bJf
 CMGjwvxTsr74/f/F95m3TH9x8o0/TU//N+7/D/ScVcA=
 """.encode('latin1')
-    uncompressed = bytearray(zlib.decompress(base64.b64decode(font)))
+    uncompressed = bytearray(zlib.decompress(base64.decodestring(font)))
     ttf = io.BytesIO(uncompressed)
     setattr(ttf, "name", "(invisible.ttf)")
     pdfmetrics.registerFont(TTFont('invisible', ttf))
@@ -166,6 +190,4 @@ if __name__ == "__main__":
         help="Save to this file instead of outputting to stdout"
     )
     args = parser.parse_args()
-    if not os.path.isdir(args.imgdir):
-        sys.exit("ERROR: Given path '" + args.imgdir + "' is not a directory")
     export_pdf(args.imgdir, 300, args.savefile)
